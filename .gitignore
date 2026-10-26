@@ -34,3 +34,4 @@ forecast_engine_backup.py
 
 # Local stray file
 /-1e-9).all()
+battery_simulator_before_dispatch_fix.py
