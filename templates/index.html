@@ -1,0 +1,481 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smart Energy Microgrid</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #09111f;
+  --panel: #121d30;
+  --border: #26364e;
+  --muted: #9eafc8;
+  --text: #e7eef9;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+}
+.container { max-width: 1480px; margin: auto; padding: 24px; }
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+h1 { font-size: clamp(24px, 3vw, 34px); margin: 0 0 7px; }
+h2 { font-size: 18px; margin: 0 0 16px; }
+.muted, .sub { color: var(--muted); font-size: 13px; }
+.actions { display: flex; gap: 9px; flex-wrap: wrap; }
+.btn {
+  display: inline-block;
+  border: 0;
+  border-radius: 9px;
+  padding: 11px 15px;
+  background: #2563eb;
+  color: white;
+  text-decoration: none;
+  font-weight: 650;
+  cursor: pointer;
+}
+.btn.secondary { background: #25344b; }
+.btn:disabled { opacity: .6; cursor: wait; }
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.card, .panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px;
+  min-width: 0;
+}
+.label { font-size: 13px; color: var(--muted); }
+.value {
+  font-size: 27px;
+  font-weight: 750;
+  margin: 12px 0 6px;
+  overflow-wrap: anywhere;
+}
+.unit { font-size: 13px; font-weight: 500; color: var(--muted); }
+.section { margin: 27px 0 13px; }
+.charts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 15px;
+}
+.chartbox { height: 300px; position: relative; }
+.wide { grid-column: 1 / -1; }
+.status {
+  padding: 11px 13px;
+  border-radius: 9px;
+  background: #12342e;
+  color: #9df0cf;
+  margin-top: 9px;
+}
+.status.warn { background: #39291c; color: #ffd49a; }
+.status.bad { background: #3d1f2a; color: #ffc0ce; }
+.tablewrap { overflow: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td {
+  padding: 11px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  text-align: right;
+}
+th { color: #a8bad3; font-weight: 650; }
+td:first-child, th:first-child { text-align: left; }
+.loading, .error {
+  padding: 16px;
+  border-radius: 10px;
+  margin-bottom: 16px;
+}
+.loading { background: #13243a; color: #c5d9f5; }
+.error {
+  background: #401e2a;
+  border: 1px solid #773347;
+  color: #ffd0d8;
+  overflow-wrap: anywhere;
+}
+.pill {
+  display: inline-block;
+  padding: 5px 8px;
+  border-radius: 20px;
+  background: #20314a;
+  color: #c5d8f4;
+  font-size: 12px;
+}
+.foot {
+  margin-top: 22px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+@media (max-width: 760px) {
+  .container { padding: 13px; }
+  .charts { grid-template-columns: 1fr; }
+  .wide { grid-column: auto; }
+  .chartbox { height: 260px; }
+  .value { font-size: 24px; }
+}
+</style>
+</head>
+
+<body>
+<main class="container">
+
+<header>
+  <div>
+    <h1>Smart Energy Microgrid</h1>
+    <div class="muted">
+      HackSphere 3.0 · Demand forecasting · Solar-aware battery dispatch
+    </div>
+  </div>
+  <div class="actions">
+    <button class="btn" id="refreshBtn">Run simulation again</button>
+    <a class="btn secondary" href="/download/report">Download CSV report</a>
+  </div>
+</header>
+
+<div id="message" class="loading">
+  Loading forecast and battery simulation…
+</div>
+
+<section id="dashboard" hidden>
+  <div class="grid" id="kpis"></div>
+
+  <h2 class="section">Energy contribution</h2>
+  <div class="grid" id="energyKpis"></div>
+
+  <h2 class="section">Intelligent strategy vs baseline</h2>
+  <div class="grid" id="comparisonKpis"></div>
+
+  <div class="panel">
+    <h2>Simulation validation</h2>
+    <div id="validation"></div>
+    <p class="sub">
+      Solar generation is estimated using irradiance, configured solar
+      capacity and performance ratio. These are simulation estimates,
+      not live meter readings. Peak-grid reduction is not a guarantee
+      of electricity-bill savings.
+    </p>
+  </div>
+
+  <h2 class="section">Forecast and dispatch charts</h2>
+  <div class="charts">
+    <div class="panel">
+      <h2>1. Predicted demand</h2>
+      <div class="chartbox"><canvas id="demandChart"></canvas></div>
+    </div>
+    <div class="panel">
+      <h2>2. Demand vs solar generation</h2>
+      <div class="chartbox"><canvas id="solarChart"></canvas></div>
+    </div>
+    <div class="panel">
+      <h2>3. Battery state of charge</h2>
+      <div class="chartbox"><canvas id="socChart"></canvas></div>
+    </div>
+    <div class="panel">
+      <h2>4. Grid backup required</h2>
+      <div class="chartbox"><canvas id="gridChart"></canvas></div>
+    </div>
+    <div class="panel">
+      <h2>5. Energy supplied</h2>
+      <div class="chartbox"><canvas id="energyChart"></canvas></div>
+    </div>
+    <div class="panel">
+      <h2>6. Charge and discharge power</h2>
+      <div class="chartbox"><canvas id="batteryPowerChart"></canvas></div>
+    </div>
+  </div>
+
+  <h2 class="section">Forecast and grid summary</h2>
+  <div class="panel tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Demand (kW)</th>
+          <th>Solar generated (kW)</th>
+          <th>Solar used (kW)</th>
+          <th>Battery discharge (kW)</th>
+          <th>Grid backup (kW)</th>
+          <th>SOC (%)</th>
+          <th>Grid mode</th>
+        </tr>
+      </thead>
+      <tbody id="forecastRows"></tbody>
+    </table>
+  </div>
+
+  <h2 class="section">Battery simulation details</h2>
+  <div class="panel tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>SOC before (%)</th>
+          <th>SOC after (%)</th>
+          <th>Charge (kW)</th>
+          <th>Discharge (kW)</th>
+          <th>Grid backup (kW)</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="batteryRows"></tbody>
+    </table>
+  </div>
+
+  <div class="actions" style="margin-top:16px">
+    <a class="btn" href="/download/report">Download intelligent strategy CSV</a>
+    <a class="btn secondary" href="/download/baseline">Download baseline CSV</a>
+  </div>
+</section>
+
+<div class="foot">
+  Local demo dashboard · Charts require an internet connection to load Chart.js.
+</div>
+</main>
+
+<script>
+let charts = {};
+
+const fmt = (v, d = 2) =>
+  Number.isFinite(Number(v)) ? Number(v).toFixed(d) : "—";
+
+const esc = (v) =>
+  String(v ?? "—").replace(/[&<>"']/g, c => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  }[c]));
+
+function metric(label, value, sub = "") {
+  return `
+    <div class="card">
+      <div class="label">${label}</div>
+      <div class="value">${value}</div>
+      <div class="sub">${sub}</div>
+    </div>`;
+}
+
+function makeChart(id, type, labels, datasets, extra = {}) {
+  if (charts[id]) charts[id].destroy();
+
+  charts[id] = new Chart(document.getElementById(id), {
+    type,
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { labels: { color: "#c2d0e3" } }
+      },
+      scales: {
+        x: {
+          ticks: {
+            color: "#9eafc8",
+            maxTicksLimit: 8,
+            maxRotation: 0
+          },
+          grid: { color: "#26364e" }
+        },
+        y: {
+          beginAtZero: true,
+          ticks: { color: "#9eafc8" },
+          grid: { color: "#26364e" }
+        }
+      },
+      ...extra
+    }
+  });
+}
+
+async function loadDashboard() {
+  const msg = document.getElementById("message");
+  const button = document.getElementById("refreshBtn");
+
+  msg.className = "loading";
+  msg.textContent = "Running forecast and battery simulation…";
+  msg.hidden = false;
+  document.getElementById("dashboard").hidden = true;
+  button.disabled = true;
+
+  try {
+    const response = await fetch("/api/dashboard-data?ts=" + Date.now());
+    const data = await response.json();
+
+    if (!response.ok || !data.success) {
+      throw new Error(data.error || `Server returned ${response.status}`);
+    }
+
+    renderDashboard(data);
+    msg.hidden = true;
+    document.getElementById("dashboard").hidden = false;
+  } catch (err) {
+    msg.className = "error";
+    msg.innerHTML =
+      "<strong>Dashboard could not load.</strong><br>" +
+      esc(err.message) +
+      "<br><br>Check the Flask terminal and confirm that " +
+      "future_weather_demo.csv and forecast_engine.py are present.";
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderDashboard(data) {
+  const s = data.summary || {};
+  const e = data.energy || {};
+  const c = data.comparison || {};
+  const v = data.validation || {};
+  const f = data.forecasts || [];
+  const b = data.batteries || [];
+
+  document.getElementById("kpis").innerHTML = [
+    metric("Forecast records", s.count ?? f.length, "Hourly simulation records"),
+    metric("Average demand", fmt(s.avg_demand_kw) + ' <span class="unit">kW</span>', "Average predicted load"),
+    metric("Peak demand", fmt(s.peak_demand_kw) + ' <span class="unit">kW</span>', "Highest predicted load"),
+    metric("Critical alerts", s.critical_count ?? 0, "Rows flagged by threshold"),
+    metric("Latest battery SOC", fmt(s.latest_soc_pct) + '<span class="unit">%</span>', "Final simulated state"),
+    metric("Peak grid backup", fmt(s.peak_grid_kw) + ' <span class="unit">kW</span>', "Maximum grid supply"),
+    metric("Peak solar generation", fmt(s.peak_solar_kw) + ' <span class="unit">kW</span>', "Estimated solar output")
+  ].join("");
+
+  document.getElementById("energyKpis").innerHTML = [
+    metric("Total demand energy", fmt(e.total_demand_kwh) + ' <span class="unit">kWh</span>', "Energy needed during the period"),
+    metric("Solar contribution", fmt(e.solar_contribution_pct) + '<span class="unit">%</span>', fmt(e.solar_used_kwh) + " kWh used directly"),
+    metric("Battery contribution", fmt(e.battery_contribution_pct) + '<span class="unit">%</span>', fmt(e.battery_used_kwh) + " kWh discharged"),
+    metric("Grid dependency", fmt(e.grid_dependency_pct) + '<span class="unit">%</span>', fmt(e.grid_used_kwh) + " kWh supplied by grid")
+  ].join("");
+
+  document.getElementById("comparisonKpis").innerHTML = [
+    metric("Baseline peak grid", fmt(c.baseline_peak_grid_kw) + ' <span class="unit">kW</span>', "Simple battery strategy"),
+    metric("Intelligent peak grid", fmt(c.intelligent_peak_grid_kw) + ' <span class="unit">kW</span>', "Predictive reserve strategy"),
+    metric("Peak-grid reduction", fmt(c.peak_grid_reduction_kw) + ' <span class="unit">kW</span>', fmt(c.peak_grid_reduction_pct) + "% vs baseline"),
+    metric("Battery discharge reduction", fmt(c.discharge_reduction_pct) + '<span class="unit">%</span>', fmt(c.baseline_discharge_kwh) + " → " + fmt(c.intelligent_discharge_kwh) + " kWh")
+  ].join("");
+
+  const balance = !!v.power_balance_pass;
+  const socPass = !!(v.soc_limits_pass ?? v.soc_limit_pass);
+
+  document.getElementById("validation").innerHTML = `
+    <div class="status ${balance ? "" : "bad"}">
+      Power balance: <strong>${balance ? "PASS" : "CHECK"}</strong>
+      · Maximum error: ${fmt(v.max_power_balance_error_kw, 6)} kW
+    </div>
+    <div class="status ${socPass ? "" : "bad"}">
+      Battery SOC limits: <strong>${socPass ? "PASS" : "CHECK"}</strong>
+      · Range: ${fmt(v.min_soc_pct)}%–${fmt(v.max_soc_pct)}%
+    </div>
+    <div class="status ${Number(e.grid_dependency_pct) > 70 ? "warn" : ""}">
+      Grid dependency: ${fmt(e.grid_dependency_pct)}%
+      ${Number(e.grid_dependency_pct) > 70
+        ? " · High grid dependency in this simulated scenario."
+        : ""}
+    </div>`;
+
+  const labels = f.map(r => r.timestamp);
+  const demand = f.map(r => Number(r.predicted_demand_kw) || 0);
+  const solar = f.map(r => Number(r.renewable_generation_kw) || 0);
+  const soc = f.map(r => Number(r.battery_soc_pct) || 0);
+  const grid = f.map(r => Number(r.grid_backup_required_kw) || 0);
+  const charge = b.map(r => Number(r.charge_power_kw) || 0);
+  const discharge = b.map(r => Number(r.discharge_power_kw) || 0);
+
+  makeChart("demandChart", "line", labels, [{
+    label: "Demand (kW)",
+    data: demand,
+    borderColor: "#60a5fa",
+    tension: .25
+  }]);
+
+  makeChart("solarChart", "line", labels, [
+    { label: "Demand (kW)", data: demand, borderColor: "#60a5fa", tension: .25 },
+    { label: "Solar generation (kW)", data: solar, borderColor: "#fbbf24", tension: .25 }
+  ]);
+
+  makeChart("socChart", "line", labels, [{
+    label: "SOC (%)",
+    data: soc,
+    borderColor: "#34d399",
+    tension: .25
+  }], {
+    scales: {
+      y: {
+        min: 0,
+        max: 100,
+        ticks: { color: "#9eafc8" },
+        grid: { color: "#26364e" }
+      }
+    }
+  });
+
+  makeChart("gridChart", "line", labels, [{
+    label: "Grid backup (kW)",
+    data: grid,
+    borderColor: "#fb7185",
+    backgroundColor: "#fb718522",
+    fill: true,
+    tension: .2
+  }]);
+
+  makeChart("energyChart", "bar", ["Solar", "Battery", "Grid"], [{
+    label: "Energy supplied (kWh)",
+    data: [
+      Number(e.solar_used_kwh) || 0,
+      Number(e.battery_used_kwh) || 0,
+      Number(e.grid_used_kwh) || 0
+    ],
+    backgroundColor: ["#fbbf24", "#34d399", "#60a5fa"]
+  }]);
+
+  makeChart("batteryPowerChart", "line", labels, [
+    { label: "Charge (kW)", data: charge, borderColor: "#34d399", tension: .2 },
+    { label: "Discharge (kW)", data: discharge, borderColor: "#fb7185", tension: .2 }
+  ]);
+
+  document.getElementById("forecastRows").innerHTML = f.map(r => `
+    <tr>
+      <td>${esc(r.timestamp)}</td>
+      <td>${fmt(r.predicted_demand_kw)}</td>
+      <td>${fmt(r.renewable_generation_kw)}</td>
+      <td>${fmt(r.solar_used_kw)}</td>
+      <td>${fmt(r.discharge_power_kw)}</td>
+      <td>${fmt(r.grid_backup_required_kw)}</td>
+      <td>${fmt(r.battery_soc_pct)}</td>
+      <td><span class="pill">${esc(r.grid_mode)}</span></td>
+    </tr>`).join("");
+
+  document.getElementById("batteryRows").innerHTML = b.map(r => `
+    <tr>
+      <td>${esc(r.timestamp)}</td>
+      <td>${fmt(r.soc_before_pct)}</td>
+      <td>${fmt(r.soc_after_pct ?? r.battery_soc_pct ?? r.soc_percent)}</td>
+      <td>${fmt(r.charge_power_kw)}</td>
+      <td>${fmt(r.discharge_power_kw)}</td>
+      <td>${fmt(r.grid_backup_required_kw ?? r.grid_backup_kw)}</td>
+      <td>${esc(r.status)}</td>
+    </tr>`).join("");
+}
+
+document.getElementById("refreshBtn").addEventListener("click", loadDashboard);
+loadDashboard();
+</script>
+</body>
+</html>

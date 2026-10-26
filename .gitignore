@@ -1,0 +1,36 @@
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+
+# Backup files and folders
+*_backup.py
+*_before_fix.csv
+backup_before_dispatch_fix/
+app_backup.py
+battery_simulator_backup.py
+forecast_engine_backup.py
+
+# Local stray file
+/-1e-9).all()
