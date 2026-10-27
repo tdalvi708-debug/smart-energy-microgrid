@@ -1,4 +1,3 @@
-
 """
 Smart Energy Microgrid - Battery Simulation Engine
 HackSphere 3.0
@@ -6,7 +5,7 @@ HackSphere 3.0
 Features:
 - Solar-first energy allocation
 - Forecast-aware battery reserve protection
-- Intelligent peak shaving
+- Intelligent peak shaving with current-peak priority
 - Optional controlled grid charging
 - Battery SOC and power limits
 - Power-balance validation
@@ -45,8 +44,7 @@ NORMAL_RESERVE_SOC_PERCENT = 20.0
 FORECAST_RESERVE_SOC_PERCENT = 40.0
 RESERVE_TRIGGER_PEAK_KW = PEAK_THRESHOLD_KW
 
-# Grid charging is deliberately optional.
-# Enable it only if grid charging is part of your project design.
+# Grid charging is disabled by default.
 GRID_CHARGING_ENABLED = False
 GRID_CHARGE_TARGET_SOC_PERCENT = 40.0
 GRID_CHARGE_MAX_KW = 30.0
@@ -79,9 +77,12 @@ def _numeric_column(df, candidates, default=0.0):
     if col is None:
         return pd.Series(default, index=df.index, dtype=float)
 
-    return pd.to_numeric(
-        df[col], errors="coerce"
-    ).replace([np.inf, -np.inf], np.nan).fillna(default).astype(float)
+    return (
+        pd.to_numeric(df[col], errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+        .fillna(default)
+        .astype(float)
+    )
 
 
 def _interval_hours(df):
@@ -98,11 +99,9 @@ def _interval_hours(df):
         timestamps = pd.to_datetime(df["timestamp"], errors="coerce")
         differences = timestamps.diff().dt.total_seconds() / 3600.0
         positive = differences[differences > 0]
-
         default_hours = (
             float(positive.median()) if not positive.empty else 1.0
         )
-
         differences.iloc[0] = default_hours
         return differences.fillna(default_hours).clip(lower=0.0)
 
@@ -132,6 +131,7 @@ def _solar_from_row(df):
 
 
 def _available_discharge_power(soc_percent, interval_hours):
+    """Maximum discharge power without crossing the hard minimum SOC."""
     if interval_hours <= EPSILON:
         return 0.0
 
@@ -150,6 +150,7 @@ def _available_discharge_power(soc_percent, interval_hours):
 
 
 def _available_charge_power(soc_percent, interval_hours):
+    """Maximum charge power without exceeding maximum SOC."""
     if interval_hours <= EPSILON:
         return 0.0
 
@@ -167,12 +168,17 @@ def _available_charge_power(soc_percent, interval_hours):
 
 
 def _future_peak(net_demand, hours, start_index):
+    """Maximum net demand in the configured lookahead window."""
     elapsed = 0.0
     peak = 0.0
 
     for j in range(start_index, len(net_demand)):
+        interval = max(0.0, float(hours[j]))
+        if interval <= EPSILON:
+            continue
+
         peak = max(peak, float(net_demand[j]))
-        elapsed += float(hours[j])
+        elapsed += interval
 
         if elapsed >= LOOKAHEAD_HOURS:
             break
@@ -181,6 +187,7 @@ def _future_peak(net_demand, hours, start_index):
 
 
 def _target_reserve_soc(future_peak_kw):
+    """Choose the reserve target based on the forecast peak."""
     if future_peak_kw >= RESERVE_TRIGGER_PEAK_KW:
         return float(np.clip(
             FORECAST_RESERVE_SOC_PERCENT,
@@ -227,7 +234,10 @@ def _prepare_energy_inputs(forecast_df):
     if not np.isfinite(hours).all():
         raise ValueError("Simulation interval contains invalid values.")
 
-    return df, demand, solar, solar_used, solar_surplus, net_demand, hours
+    return (
+        df, demand, solar, solar_used, solar_surplus,
+        net_demand, hours
+    )
 
 
 # ============================================================
@@ -312,7 +322,6 @@ def _simulate(forecast_df, intelligent=True):
             soc = min(soc, MAX_SOC_PERCENT)
 
         # B. Optional grid charging for an upcoming forecast peak.
-        # Grid charging does not occur unless explicitly enabled.
         if (
             intelligent
             and GRID_CHARGING_ENABLED
@@ -352,7 +361,7 @@ def _simulate(forecast_df, intelligent=True):
             )
             soc = min(soc, target_soc, MAX_SOC_PERCENT)
 
-                # C. FORECAST-AWARE BATTERY DISPATCH
+        # C. Forecast-aware battery dispatch.
         available_kw = _available_discharge_power(soc, interval)
         available_powers.append(available_kw)
 
@@ -362,11 +371,11 @@ def _simulate(forecast_df, intelligent=True):
                 net_kw - GRID_THRESHOLD_KW,
             )
 
-            if intelligent:
-                reserve_floor = reserve_soc
-            else:
-                reserve_floor = MIN_SOC_PERCENT
+            reserve_floor = (
+                reserve_soc if intelligent else MIN_SOC_PERCENT
+            )
 
+            # Battery energy available above the selected reserve floor.
             energy_above_reserve_kwh = max(
                 0.0,
                 (soc - reserve_floor)
@@ -375,22 +384,16 @@ def _simulate(forecast_df, intelligent=True):
                 * DISCHARGE_EFFICIENCY,
             )
 
-            # Estimate the remaining peak-shaving energy demand.
+            # Estimate peak-shaving energy demand over the lookahead window.
             future_peak_energy_kwh = 0.0
             elapsed_hours = 0.0
 
             for j in range(i, len(net_demand)):
-                future_interval = max(
-                    0.0, float(hours[j])
-                )
-
+                future_interval = max(0.0, float(hours[j]))
                 if future_interval <= EPSILON:
                     continue
 
-                future_net_kw = max(
-                    0.0, float(net_demand[j])
-                )
-
+                future_net_kw = max(0.0, float(net_demand[j]))
                 peak_excess_kw = max(
                     0.0,
                     future_net_kw - GRID_THRESHOLD_KW,
@@ -404,22 +407,41 @@ def _simulate(forecast_df, intelligent=True):
                 if elapsed_hours >= LOOKAHEAD_HOURS:
                     break
 
-            if intelligent and future_peak_energy_kwh > EPSILON:
-                # Share available energy across the forecast window.
-                allocated_energy_kwh = (
-                    energy_above_reserve_kwh
-                    * desired_discharge_kw
-                    * interval
-                    / future_peak_energy_kwh
-                )
+            if intelligent:
+                # Allocate the energy above reserve across the forecast
+                # peak-shaving requirement instead of spending it all on
+                # the first peak. The share for this interval is proportional
+                # to this interval's peak excess energy.
+                if future_peak_energy_kwh > EPSILON:
+                    allocated_energy_kwh = (
+                        energy_above_reserve_kwh
+                        * desired_discharge_kw
+                        * interval
+                        / future_peak_energy_kwh
+                    )
+                    budgeted_power_kw = allocated_energy_kwh / interval
+                else:
+                    budgeted_power_kw = 0.0
 
-                budgeted_power_kw = (
-                    allocated_energy_kwh / interval
+                # Never exceed current demand or the energy budget.
+                budgeted_power_kw = min(
+                    desired_discharge_kw,
+                    budgeted_power_kw,
+                    energy_above_reserve_kwh / interval,
                 )
-            elif intelligent:
-                budgeted_power_kw = 0.0
             else:
-                budgeted_power_kw = desired_discharge_kw
+                # Baseline controller can discharge down to the hard minimum.
+                energy_above_minimum_kwh = max(
+                    0.0,
+                    (soc - MIN_SOC_PERCENT)
+                    / 100.0
+                    * BATTERY_CAPACITY_KWH
+                    * DISCHARGE_EFFICIENCY,
+                )
+                budgeted_power_kw = min(
+                    desired_discharge_kw,
+                    energy_above_minimum_kwh / interval,
+                )
 
             discharge_kw = min(
                 desired_discharge_kw,
@@ -429,22 +451,18 @@ def _simulate(forecast_df, intelligent=True):
             )
 
             soc -= (
-                discharge_kw
-                * interval
+                discharge_kw * interval
                 / DISCHARGE_EFFICIENCY
-                / BATTERY_CAPACITY_KWH
-                * 100.0
+                / BATTERY_CAPACITY_KWH * 100.0
             )
 
-            soc = float(
-                np.clip(
-                    soc,
-                    MIN_SOC_PERCENT,
-                    MAX_SOC_PERCENT,
-                )
+            # Numerical safety: do not permit SOC to cross the active floor.
+            soc = max(
+                reserve_floor if intelligent else MIN_SOC_PERCENT,
+                min(soc, MAX_SOC_PERCENT),
             )
 
-        # D. Grid supplies the remaining demand plus any grid charging.
+        # D. Grid supplies remaining demand plus any grid charging.
         grid_kw = max(
             0.0,
             current_demand + grid_charge_kw
@@ -619,12 +637,15 @@ def validate_simulation(simulation_df):
 
     reserve_pass = True
 
+    required_reserve_columns = {
+        "target_reserve_soc_pct",
+        "battery_soc_pct",
+        "discharge_power_kw",
+        "scheduling_strategy",
+    }
+
     if (
-        "target_reserve_soc_pct" in df.columns
-        and "battery_soc_before_pct" in df.columns
-        and "battery_soc_pct" in df.columns
-        and "discharge_power_kw" in df.columns
-        and "scheduling_strategy" in df.columns
+        required_reserve_columns.issubset(df.columns)
         and df["scheduling_strategy"].astype(str)
         .str.contains("Intelligent", case=False).any()
     ):
@@ -632,20 +653,13 @@ def validate_simulation(simulation_df):
             df["scheduling_strategy"].astype(str)
             .str.contains("Intelligent", case=False)
         )
-
         target = _numeric_column(df, ["target_reserve_soc_pct"])
         soc_after = _numeric_column(df, ["battery_soc_pct"])
         discharge_values = _numeric_column(df, ["discharge_power_kw"])
 
-        # When discharging, the battery must not fall below its
-        # predicted reserve. Rows without discharge must also respect
-        # reserve if they started at or above that reserve.
         discharged = intelligent_rows & (discharge_values > EPSILON)
         reserve_pass = bool(
-            (
-                soc_after[discharged]
-                >= target[discharged] - 1e-6
-            ).all()
+            (soc_after[discharged] >= target[discharged] - 1e-6).all()
         )
 
     return {
@@ -696,9 +710,11 @@ if __name__ == "__main__":
         ]
 
         print("\nINTELLIGENT SIMULATION")
-        print(smart[
-            [c for c in display_columns if c in smart.columns]
-        ].to_string(index=False))
+        print(
+            smart[
+                [c for c in display_columns if c in smart.columns]
+            ].to_string(index=False)
+        )
 
         print("\nINTELLIGENT VALIDATION")
         print(validate_simulation(smart))
