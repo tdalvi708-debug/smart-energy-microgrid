@@ -2,7 +2,10 @@
 import pandas as pd
 import numpy as np
 import joblib
+<<<<<<< HEAD
 import onnxruntime as ort
+=======
+>>>>>>> e49fcc237a3a6db22aeffa04270771828a3a2e2c
 
 from pathlib import Path
 from grid_controller import get_grid_status
@@ -10,6 +13,7 @@ from grid_controller import get_grid_status
 
 # Project paths
 BASE_DIR = Path(__file__).resolve().parent
+<<<<<<< HEAD
 MODEL_PATH = BASE_DIR / "models" / "demand_model.onnx"
 FEATURE_PATH = BASE_DIR / "models" / "feature_names.joblib"
 
@@ -44,6 +48,30 @@ def load_model():
     _features = features
 
     return _onnx_session, _input_name, _features
+=======
+MODEL_PATH = BASE_DIR / "models" / "demand_model.joblib"
+FEATURE_PATH = BASE_DIR / "models" / "feature_names.joblib"
+
+
+def load_model():
+    """Load the trained model and its expected feature names."""
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(
+            f"Model file not found: {MODEL_PATH}. "
+            "Run python train_model.py first."
+        )
+
+    if not FEATURE_PATH.exists():
+        raise FileNotFoundError(
+            f"Feature file not found: {FEATURE_PATH}. "
+            "Run python train_model.py first."
+        )
+
+    model = joblib.load(MODEL_PATH)
+    features = joblib.load(FEATURE_PATH)
+
+    return model, features
+>>>>>>> e49fcc237a3a6db22aeffa04270771828a3a2e2c
 
 
 def prepare_features(input_df):
@@ -92,6 +120,7 @@ def prepare_features(input_df):
 
 
 def forecast_demand(input_df):
+<<<<<<< HEAD
     """Predict demand using ONNX and calculate grid decisions."""
     session, input_name, features = load_model()
     prepared_df = prepare_features(input_df)
@@ -104,6 +133,13 @@ def forecast_demand(input_df):
 
     if len(predictions) != len(prepared_df):
         raise ValueError("Prediction count does not match input rows.")
+=======
+    """Predict energy demand and calculate grid decisions."""
+    model, features = load_model()
+    prepared_df = prepare_features(input_df)
+
+    predictions = model.predict(prepared_df[features])
+>>>>>>> e49fcc237a3a6db22aeffa04270771828a3a2e2c
 
     if not np.isfinite(predictions).all():
         raise ValueError("Model returned invalid predictions.")
@@ -113,13 +149,27 @@ def forecast_demand(input_df):
     for timestamp, demand in zip(
         prepared_df["timestamp"], predictions
     ):
+<<<<<<< HEAD
         results.append(get_grid_status(timestamp, float(demand)))
+=======
+        status = get_grid_status(timestamp, demand)
+        results.append(status)
+>>>>>>> e49fcc237a3a6db22aeffa04270771828a3a2e2c
 
     return pd.DataFrame(results)
 
 
 def forecast_next_24_hours(start_time, weather_data):
+<<<<<<< HEAD
     """Generate a 24-hour forecast from 24 hourly weather rows."""
+=======
+    """
+    Generate a 24-hour forecast.
+
+    weather_data must contain 24 rows with weather values for
+    each corresponding hour.
+    """
+>>>>>>> e49fcc237a3a6db22aeffa04270771828a3a2e2c
     weather_columns = [
         "ambient_temp_c",
         "humidity_pct",
@@ -151,6 +201,10 @@ def forecast_next_24_hours(start_time, weather_data):
     return forecast_demand(forecast_input)
 
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> e49fcc237a3a6db22aeffa04270771828a3a2e2c
 if __name__ == "__main__":
     print("SMART ENERGY 24-HOUR DEMO FORECAST")
     print("=" * 60)
@@ -161,7 +215,11 @@ if __name__ == "__main__":
     if not input_path.exists():
         raise FileNotFoundError(
             f"{input_path.name} not found. "
+<<<<<<< HEAD
             "Copy the demo weather CSV into the project folder."
+=======
+            "Run python create_future_weather.py first."
+>>>>>>> e49fcc237a3a6db22aeffa04270771828a3a2e2c
         )
 
     weather_df = pd.read_csv(input_path)
@@ -174,7 +232,14 @@ if __name__ == "__main__":
             f"Expected 24 rows, found {len(weather_df)}."
         )
 
+<<<<<<< HEAD
     forecast = forecast_demand(weather_df)
+=======
+    # These timestamps are future relative to the historical dataset,
+    # but not necessarily future relative to today's real date.
+    forecast = forecast_demand(weather_df)
+
+>>>>>>> e49fcc237a3a6db22aeffa04270771828a3a2e2c
     forecast.to_csv(output_path, index=False)
 
     print("\nFirst 5 predicted results:")

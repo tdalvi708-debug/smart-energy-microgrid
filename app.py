@@ -81,6 +81,7 @@ def numeric_series(df, names, default=0.0):
 
 
 def prepare_simulation():
+<<<<<<< HEAD
     """Load the validated 1000-row simulation for the dashboard."""
     simulation_file = BASE_DIR / "starter_kit" / "full_battery_simulation.csv"
 
@@ -114,10 +115,35 @@ def prepare_simulation():
 
     battery = (
         battery.dropna(subset=["timestamp"])
+=======
+    """Run demand forecasting and battery dispatch, then save CSV results."""
+    if not WEATHER_FILE.exists():
+        raise FileNotFoundError(f"Weather demo file not found: {WEATHER_FILE}")
+
+    weather = pd.read_csv(WEATHER_FILE)
+
+    required = [
+        "timestamp",
+        "ambient_temp_c",
+        "humidity_pct",
+        "solar_irradiance_wm2",
+    ]
+    missing = [c for c in required if c not in weather.columns]
+
+    if missing:
+        raise ValueError(f"Weather file is missing columns: {missing}")
+
+    weather["timestamp"] = pd.to_datetime(
+        weather["timestamp"], errors="coerce"
+    )
+    weather = (
+        weather.dropna(subset=["timestamp"])
+>>>>>>> e49fcc237a3a6db22aeffa04270771828a3a2e2c
         .sort_values("timestamp")
         .reset_index(drop=True)
     )
 
+<<<<<<< HEAD
     if battery.empty:
         raise ValueError("The full simulation CSV contains no valid records.")
 
@@ -163,6 +189,156 @@ def prepare_simulation():
     validation = validate_simulation(battery)
 
     return forecast, battery, validation
+=======
+    if weather.empty:
+        raise ValueError("No valid timestamps found in future_weather_demo.csv.")
+
+    forecast = run_forecast(weather.copy()).copy()
+
+    if forecast.empty:
+        raise ValueError("The forecasting function returned no rows.")
+
+    if "timestamp" not in forecast.columns:
+        if len(forecast) != len(weather):
+            raise ValueError(
+                "Forecast has no timestamp column and its row count "
+                "differs from the weather data."
+            )
+        forecast["timestamp"] = weather["timestamp"].values
+
+    forecast["timestamp"] = pd.to_datetime(
+        forecast["timestamp"], errors="coerce"
+    )
+    forecast = forecast.dropna(subset=["timestamp"]).copy()
+
+    weather_cols = [
+        "timestamp",
+        "ambient_temp_c",
+        "humidity_pct",
+        "solar_irradiance_wm2",
+    ]
+
+    forecast = forecast.drop(
+        columns=[
+            c for c in weather_cols[1:]
+            if c in forecast.columns
+        ],
+        errors="ignore",
+    )
+
+    forecast = forecast.merge(
+        weather[weather_cols],
+        on="timestamp",
+        how="left",
+    )
+
+    if forecast["solar_irradiance_wm2"].isna().any():
+        raise ValueError(
+            "Forecast timestamps do not match timestamps in the weather file."
+        )
+
+    demand_col = find_column(
+        forecast,
+        [
+            "predicted_demand_kw",
+            "forecast_demand_kw",
+            "demand_prediction_kw",
+            "target_demand_kw",
+            "predicted_demand",
+            "demand_kw",
+        ],
+    )
+
+    forecast["predicted_demand_kw"] = pd.to_numeric(
+        forecast[demand_col], errors="coerce"
+    )
+
+    if forecast["predicted_demand_kw"].isna().any():
+        raise ValueError("Forecast contains missing or non-numeric demand values.")
+
+    forecast["predicted_demand_kw"] = forecast[
+        "predicted_demand_kw"
+    ].clip(lower=0)
+
+    # Estimate solar generation using irradiance and configured capacity.
+    forecast["renewable_generation_kw"] = (
+        pd.to_numeric(
+            forecast["solar_irradiance_wm2"], errors="coerce"
+        ).fillna(0).clip(lower=0)
+        / 1000.0
+        * SOLAR_CAPACITY_KW
+        * SOLAR_PERFORMANCE_RATIO
+    )
+
+    battery = simulate_battery(forecast.copy()).copy()
+
+    aliases = {
+        "solar_generation_kw": "renewable_generation_kw",
+        "solar_used_kw": "renewable_used_kw",
+        "battery_charge_kw": "charge_power_kw",
+        "battery_discharge_kw": "discharge_power_kw",
+        "battery_soc_after_pct": "battery_soc_pct",
+        "grid_backup_kw": "grid_backup_required_kw",
+        "critical_alert": "critical_overload_alert",
+    }
+
+    for alias, source in aliases.items():
+        if alias not in battery.columns and source in battery.columns:
+            battery[alias] = battery[source]
+
+    battery["timestamp"] = pd.to_datetime(
+        battery["timestamp"], errors="coerce"
+    )
+    forecast["timestamp"] = pd.to_datetime(
+        forecast["timestamp"], errors="coerce"
+    )
+
+    battery_columns = [
+        "timestamp",
+        "battery_soc_pct",
+        "battery_status",
+        "upcoming_peak_demand_kw",
+        "target_reserve_soc_pct",
+        "required_battery_power_kw",
+        "available_battery_power_kw",
+        "grid_backup_required_kw",
+        "operational_status",
+        "alert",
+        "critical_overload_alert",
+    ]
+
+    battery_columns = [
+        c for c in battery_columns if c in battery.columns
+    ]
+
+    forecast = forecast.drop(
+        columns=[
+            c for c in battery_columns
+            if c != "timestamp" and c in forecast.columns
+        ],
+        errors="ignore",
+    )
+
+    forecast = forecast.merge(
+        battery[battery_columns].drop_duplicates(subset=["timestamp"]),
+        on="timestamp",
+        how="left",
+        validate="one_to_one",
+    )
+
+    if "battery_soc_pct" not in forecast.columns:
+        raise ValueError("Battery SOC column is missing from the forecast results.")
+
+    if forecast["battery_soc_pct"].isna().any():
+        raise ValueError(
+            "Some forecast timestamps have no matching battery SOC values."
+        )
+
+    forecast.to_csv(FORECAST_FILE, index=False)
+    battery.to_csv(BATTERY_FILE, index=False)
+
+    return forecast, battery, validate_simulation(battery)
+>>>>>>> e49fcc237a3a6db22aeffa04270771828a3a2e2c
 
 
 def calculate_energy_metrics(battery: pd.DataFrame):
@@ -217,6 +393,7 @@ def safe_records(df: pd.DataFrame):
     return temp.to_dict(orient="records")
 
 
+<<<<<<< HEAD
 
 def build_dashboard_payload():
     forecast, battery, validation = prepare_simulation()
@@ -253,6 +430,14 @@ def build_dashboard_payload():
             "Baseline and intelligent simulation timestamps do not match."
         )
 
+=======
+def build_dashboard_payload():
+    forecast, battery, validation = prepare_simulation()
+
+    baseline = simulate_battery_baseline(forecast.copy()).copy()
+    baseline.to_csv(BASELINE_FILE, index=False)
+
+>>>>>>> e49fcc237a3a6db22aeffa04270771828a3a2e2c
     energy = calculate_energy_metrics(battery)
 
     demand = numeric_series(
@@ -291,9 +476,14 @@ def build_dashboard_payload():
             pd.Series(False, index=battery.index),
         ),
     )
+<<<<<<< HEAD
     critical = pd.Series(critical, index=battery.index)
     critical_count = int(
         critical.fillna(False).astype(bool).sum()
+=======
+    critical_count = int(
+        pd.Series(critical).fillna(False).astype(bool).sum()
+>>>>>>> e49fcc237a3a6db22aeffa04270771828a3a2e2c
     )
 
     baseline_grid = numeric_series(
@@ -309,9 +499,13 @@ def build_dashboard_payload():
         ["battery_soc_pct", "battery_soc_after_pct", "soc_pct"],
     )
 
+<<<<<<< HEAD
     hours = numeric_series(
         battery, ["interval_hours"], 1.0
     ).clip(lower=0)
+=======
+    hours = numeric_series(battery, ["interval_hours"], 1.0).clip(lower=0)
+>>>>>>> e49fcc237a3a6db22aeffa04270771828a3a2e2c
     baseline_hours = numeric_series(
         baseline, ["interval_hours"], 1.0
     ).clip(lower=0)
@@ -331,6 +525,10 @@ def build_dashboard_payload():
         (baseline_discharge * baseline_hours).sum()
     )
 
+<<<<<<< HEAD
+=======
+    # A percentage reduction is undefined when baseline discharge is zero.
+>>>>>>> e49fcc237a3a6db22aeffa04270771828a3a2e2c
     discharge_reduction_pct = (
         round(
             (1 - intelligent_discharge_kwh / baseline_discharge_kwh) * 100,
@@ -424,7 +622,10 @@ def build_dashboard_payload():
     }
 
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> e49fcc237a3a6db22aeffa04270771828a3a2e2c
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -502,6 +703,7 @@ def download_baseline():
 
 
 if __name__ == "__main__":
+<<<<<<< HEAD
     import os
 
     port = int(
@@ -512,3 +714,6 @@ if __name__ == "__main__":
     )
 
     app.run(host="0.0.0.0", port=port, debug=False)
+=======
+    app.run(host="127.0.0.1", port=5000, debug=True)
+>>>>>>> e49fcc237a3a6db22aeffa04270771828a3a2e2c
