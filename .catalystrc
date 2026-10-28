@@ -1,0 +1,37 @@
+{
+  "defaults": {
+    "project": 1
+  },
+  "actives": {
+    "project": 1,
+    "env": 1
+  },
+  "projects": [
+    {
+      "idx": 1,
+      "id": "91604000000013050",
+      "name": "SmartEnergyMicrogrid",
+      "domain": {
+        "id": "50047207678",
+        "name": "smartenergymicrogrid-60093507577.development"
+      },
+      "timezone": "Asia/Kolkata",
+      "env": [
+        {
+          "idx": 1,
+          "id": "60093507577",
+          "name": "Development",
+          "type": 3,
+          "env_status": "Active",
+          "project_details": {
+            "project_name": "SmartEnergyMicrogrid",
+            "id": "91604000000013050",
+            "project_type": "Live"
+          },
+          "is_default": true,
+          "action_required": false
+        }
+      ]
+    }
+  ]
+}
